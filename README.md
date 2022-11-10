@@ -6,4 +6,5 @@ Currently, here deposited is the file used for evaluation of fugacity of CO2 (fC
 For more details, please see section 3.5.5, Figure B2, and Appendix C3.3 in Friedlingstein et al. (2022): Globl Carbon Budget 2022, https://doi.org/10.5194/essd-14-4811-2022.
 
 Script by Luke Gregor, ETH.
+
 Repository maintained by Judith Hauck, AWI.
