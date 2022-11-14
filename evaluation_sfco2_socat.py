@@ -798,3 +798,12 @@ def _get_woa13_land_sea_mask(save_dir="."):
     mask = mask.astype(float)
 
     return mask
+
+
+def download(url, dest_path='.', progressbar=True):
+    from pooch import retrieve
+    
+    fname = url.split('/')[-1].split('?')[0]
+    dest = retrieve(url, None, fname, dest_path, progressbar=progressbar)
+
+    return dest
