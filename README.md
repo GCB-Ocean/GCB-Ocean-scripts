@@ -10,6 +10,13 @@ Script by Luke Gregor, ETH.
 
 Repository maintained by Judith Hauck, AWI.
 
+## Change log
+
+- 2023-07-11: Luke Gregor
+  - made it easier to change the SOCAT url.
+  - Updated demo notebook to show how to perform analysis on only 1990-202X.
+  - Improved logging to make dataset end year more explicit.
+
 ## Requirements
 
 - Python 3.8 +

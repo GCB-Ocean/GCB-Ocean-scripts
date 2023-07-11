@@ -215,6 +215,10 @@ class Mapping(object):
     @wraps(map_subplot)
     def contour(self, **kwargs):
         return self._plot(**kwargs, plot_func="contour")
+    
+    @wraps(map_subplot)
+    def imshow(self, **kwargs):
+        return self._plot(**kwargs, plot_func="imshow")
 
     def _text(
         self, s, x=90, y=50, ha="center", va="center", weight="bold", size=12, **props

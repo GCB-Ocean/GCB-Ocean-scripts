@@ -57,11 +57,14 @@ import pathlib
 from functools import lru_cache, wraps
 import logging
 
-# will be used to create caching directories. the default 
+# constants that are set for this script. These can be changed after initialisation (see Demo)
+SOCAT_URL = "https://socat.info/socat_files/v2023/SOCATv2023_tracks_gridded_monthly.nc.zip"
+# will be used to create caching directories. 
 # expects a folder in the base directory called ./data_cache
-BASE = pathlib.Path(__file__).parent
-YEAR = 2021  # the end year (e.g. set to 2022 for GCB-v2023)
+BASE = pathlib.Path(__file__).parent.expanduser().resolve().absolute()
+YEAR_END = pd.Timestamp.today().year - 1  # the end year (e.g. set to 2022 for GCB-v2023)
 LOG_LEVEL = 20  # sets the verbosity of output (higher is less verbose)
+
 
 
 class Logger(logging.Logger):
@@ -163,27 +166,37 @@ class Logger(logging.Logger):
 
 # create logger for logging when evaluate_sfco2 isn't run first 
 # (which also creates a logger)
-log_func = Logger(f"GCB-{YEAR+1}").log
+logger = Logger(f"GCB-{YEAR_END+1}", format="[%name: %Y-%m-%d %H:%M:%S] %message")
+log_func = logger.log
+log_func(20, f"Welcome to the Global Carbon Budget - Ocean CO2 evaluation script")
+log_func(20, f"GCB-Ocean evaluation final year of analysis is {YEAR_END} (based on current year - 1)")
+log_func(20, "To change, run gcb_eval.YEAR_END = <your chosen year>")
+log_func(20, f"SOCAT will be downloaded from {SOCAT_URL}\n")
 
 
 def evaluate_sfco2(sfco2, region='all', method='annual', cache_dir=f"{BASE}/data_cache/", log_level=LOG_LEVEL):
     """
-    Evaluates predicted sfco2 against SOCATv2022 sfCO2
+    Evaluates predicted sfco2 against SOCATv202X sfCO2
     
     Note 
     ----
-    You will have to apply a mask to the input yourself. 
-    In GCB2022 the mask is the area that all data products cover, thus
-    cannot be created or derived for each individual product
+    You will have to apply a mask to the input data to ensure 
+    that all models and pCO2-products are compared fairly since
+    not all products have the same coverage. This can heavily 
+    influence the results since marginal regions that are not 
+    covered by all methods often have the largest variability 
+    and thus uncertainty. 
 
     Parameters
     ----------
     sfco2 : [np.ndarray, xr.DataArray]
         Must be a 3-dimensional array [time, lat, lon] with 
         lat = [-90, 90], lon = [-180, 180]. Assumed that time ends
-        on 2021-12-15
+        on 202X-12-15 (set in global options)
     method : str, optional
         'monthly' or 'annual', by default 'annual'
+        'annual' compares the spatially-averaged time series 
+        'monthly' does a point-wise comparison and then averages spatially
     region : [int, str]
         choose from one of three regions. global=0, north=1, tropics=2, south=3, all=4
         can be a string or an integer value, by default 'all'
@@ -198,11 +211,7 @@ def evaluate_sfco2(sfco2, region='all', method='annual', cache_dir=f"{BASE}/data
         but will always contain RMSE and bias. Also contains the gridded
         model_sfco2, socat_sfco2, and mask data (that also contains sea mask)
     """
-    global logger, log_func
-    
-    logger = Logger(f"GCB-{YEAR + 1}-eval", log_level)
-    log_func = logger.log
-
+        
     da_list = conform_inputs_to_gcb_format(sfco2)
     da = da_list[0].astype(float)
     check_lon_alignment(da)
@@ -217,15 +226,17 @@ def _socat_evaluation_all(
 
     eval_func = _socat_evaluation_region
     drop = ["mask", "sfco2_socat", "sfco2_input"]
+    socat_version = get_socat().version
 
-    log_func(25, f"Comparing sfco2 against SOCATv2022 for region {'GLOBAL'}")
+    log_func(25, f"Comparing sfco2 against {socat_version} for region {'GLOBAL'}")
     ds = eval_func(
         sfco2, region="global", method=method, cache_dir=cache_dir
     )
+    
     rmse = ds.drop(drop).expand_dims(region=["global"])
 
     for r in ["north", "tropics", "south"]:
-        log_func(25, f"Comparing sfco2 against SOCATv2022 for region {r.upper()}")
+        log_func(25, f"Comparing sfco2 against {socat_version} for region {r.upper()}")
         reg = eval_func(sfco2, region=r, method=method, cache_dir=cache_dir)
         reg = reg.drop(drop)
         reg = reg.expand_dims(region=[r])
@@ -268,7 +279,7 @@ def _socat_evaluation_region(
     """
 
     log_func(10, "Fetching SOCAT data and region mask")
-    socat_sfco2 = get_socat(cache_dir).sel(time=slice(None, f"{YEAR}-12"))
+    socat_sfco2 = get_socat(cache_dir).sel(time=slice(None, f"{YEAR_END}-12"))
     mask = get_region_mask(region, cache_dir=cache_dir)
     log_func(20, f"Calculating statistics for region: {mask.region_name}")
 
@@ -285,12 +296,13 @@ def _socat_evaluation_region(
     # doing the masking before we calculate statistics
     ym = y.where(m)
     yhatm = yhat.where(m)
+    
     if method == "monthly":
         stats = rmse_monthly(ym, yhatm)
-        log_func(20, f"Using monthly RMSE method: {stats.rmse.description}")
+        log_func(20, f"Using monthly point-wise RMSE method: {stats.rmse_avg.description}\n")
     elif method == "annual":
         stats = rmse_annual(ym, yhatm)
-        log_func(20, f"Using annual RMSE method {stats.rmse.description}")
+        log_func(20, f"Using annual time-series-based RMSE method {stats.rmse_avg.description}\n")
     else:
         raise ValueError(
             f"Method {method} not recognised. Choose 'monthly' or 'annual'"
@@ -351,7 +363,7 @@ def check_pco2_values(sfco2):
             f"X = [{lower}, {upper}] E = [0, 1000]. "
             f"Please check that the input variable is pCO2 in uatm.")
     else:
-        log_func(20, f"sfco2 is within expected range [0, 1000] - [{lower}, {upper}]. ")
+        log_func(20, f"Input sfco2 is within expected range [0, 1000] - [{lower}, {upper}]. \n")
 
 
 def rmse_annual(y, yhat):
@@ -395,21 +407,21 @@ def rmse_annual(y, yhat):
     diff = yhat_an_detrend - y_an_detrend
 
     stats = dict(
-        diff_annual=diff,
-        count_annual=count_an,
-        bias=diff.mean("year"),
-        rmse=(diff**2).mean("year") ** 0.5,
+        residuals=diff,
+        counts_socat=count_an,
+        bias_avg=diff.mean("year"),
+        rmse_avg=(diff**2).mean("year") ** 0.5,
     )
 
     stats = dict_to_dataset(stats)
-    stats.diff_annual.attrs = dict(
+    stats.residuals.attrs = dict(
         description="difference between model and socat detrended time series where SOCAT has data"  # noqa
     )
-    stats.count_annual.attrs = dict(description="number of socat points in each year")
-    stats.bias.attrs = dict(
+    stats.counts_socat.attrs = dict(description="number of socat points in each year")
+    stats.bias_avg.attrs = dict(
         description="bias between model and socat detrended time series"
     )
-    stats.rmse.attrs = dict(
+    stats.rmse_avg.attrs = dict(
         description="fco2[time, lat, lon] --> mean(lat, lon) -> annual_mean -> detrend -> (fco2 - socat) -> square(resid) -> mean -> sqrt"  # noqa
     )
 
@@ -448,31 +460,32 @@ def rmse_monthly(y, yhat):
     rmse = (diff**2).mean(["lat", "lon"])
     bias = diff.mean(["lat", "lon"])
 
+    # stats resampled to one year periods
     rmse_an = rmse.groupby("time.year").mean("time") ** 0.5
     bias_an = bias.groupby("time.year").mean("time")
     count_an = count.groupby("time.year").sum("time")
 
     stats = dict_to_dataset(
         dict(
-            rmse_annual=rmse_an,
-            bias_annual=bias_an,
-            count_annual=count_an,
-            rmse=rmse_an.mean("year"),
-            bias=bias_an.mean("year"),
+            rmse=rmse_an,
+            bias=bias_an,
+            counts_socat=count_an,
+            rmse_avg=rmse_an.mean("year"),
+            bias_avg=bias_an.mean("year"),
         )
     )
 
-    stats.rmse_annual.attrs = dict(
+    stats.rmse.attrs = dict(
         description="(fco2 - socat) -> resid[time,lat,lon] -> square(resid) -> mean(lat, lon) -> annual_mean -> sqrt"  # noqa
     )
-    stats.bias_annual.attrs = dict(
+    stats.bias.attrs = dict(
         description="(fco2 - socat) -> resid[time,lat,lon] -> mean(lat, lon) -> annual_mean"  # noqa
     )
-    stats.count_annual.attrs = dict(description="number of socat points in each year")
-    stats.rmse.attrs = dict(
+    stats.counts_socat.attrs = dict(description="number of socat grid points in each year")
+    stats.rmse_avg.attrs = dict(
         description="(fco2 - socat) -> resid[time,lat,lon] -> square(resid) -> mean(lat, lon) -> annual_mean -> sqrt -> mean"  # noqa
     )
-    stats.bias.attrs = dict(
+    stats.bias_avg.attrs = dict(
         description="(fco2 - socat) -> resid[time,lat,lon] -> mean(lat, lon) -> annual_mean -> mean"  # noqa
     )
 
@@ -601,13 +614,13 @@ def conform_inputs_to_gcb_format(*args) -> list:
 
     # the goal here is to make all inputs data arrays
     if all(is_xda):
-        log_func(20, "All inputs are xarray.DataArray, not changes made")
+        log_func(20, "All inputs are xarray.DataArray, no changes made")
         new_args = args
     else:
         new_args = np.ndarray([len(args)], dtype="object")
         for i, da in enumerate(args):
             new_args[i] = convert_array_to_xarray_based_on_shape(da)
-        log_func(20, "Converted inputs to xr.DataArray based on shape")
+        log_func(20, f"Converted monthly input to xr.DataArray based on shape (assumed end year = {YEAR_END})")
 
     # choosing overlapping time steps only
     # find the overlapping time steps (max t0, min t1)
@@ -619,10 +632,10 @@ def conform_inputs_to_gcb_format(*args) -> list:
             tmin = max([t0, tmin])
             tmax = min([t1, tmax])
     tmin, tmax = [pd.Timestamp(t) for t in [tmin, tmax]]
-    log_func(10, f"Common time period: {tmin:%Y-%m} - {tmax:%Y-%m}")
-    if tmax.year < YEAR:
+    log_func(20, f"Common time period: {tmin:%Y-%m} - {tmax:%Y-%m}")
+    if tmax.year < YEAR_END:
         raise ValueError(
-            f"Lowest year in data is {tmax.year}, but must be {YEAR} for GCB 2022"
+            f"Lowest year in data is {tmax.year}, but must be {YEAR_END} for GCB 2022"
         )
 
     for i, da in enumerate(new_args):
@@ -635,7 +648,7 @@ def conform_inputs_to_gcb_format(*args) -> list:
 def convert_array_to_xarray_based_on_shape(array):
     """Converts the input array to [time, lat, lon] xr.DataArray
     
-    Assumes that time = [???? : 2021-12-15], lat = [-89.5 : 89.5], lon = [0.5, 359.5]
+    Assumes that time = [???? : YYYY-12-15], lat = [-89.5 : 89.5], lon = [0.5, 359.5]
 
     Parameters
     ----------
@@ -656,7 +669,7 @@ def convert_array_to_xarray_based_on_shape(array):
     lon = np.arange(0.5, 360)
 
     if len(array.shape) == 3:
-        t0 = f"{YEAR}-12-01"  # starting time
+        t0 = f"{YEAR_END}-12-01"  # starting time
         td = pd.Timedelta("14D")  # time delta
         tn = array.shape[0]  # time number of points
         time = pd.date_range(t0, periods=tn, freq="-1MS")[::-1] + td
@@ -746,18 +759,23 @@ def get_regions(da):
 def _get_socat(save_dir="."):
     from pandas import Timedelta
     import pooch
+    import re
 
-    url = "https://www.socat.info/socat_files/v2022/SOCATv2022_tracks_gridded_monthly.nc.zip"  # noqa
-    filename = url.split("/")[-1]
+    filename = SOCAT_URL.split("/")[-1]
     fname = pooch.retrieve(
-        url,
+        SOCAT_URL,
         None,
         path=save_dir,
         fname=filename,
         progressbar=True,
         processor=pooch.Unzip(),
-    )
+    )[0]
 
+    version = re.findall("SOCATv[0-9]{4}", fname)
+    if len(version) > 0:
+        version = version[0]
+    else:
+        version = "SOCATv????"
     ds = xr.open_mfdataset(fname)
     time = ds.tmnth.values.astype("datetime64[M]") + Timedelta(days=14)
     da = (
@@ -767,6 +785,7 @@ def _get_socat(save_dir="."):
         .assign_attrs(
             units="uatm",
             long_name="Sea surface fugacity of CO2",
+            version=version,
         )
     )
 
@@ -800,10 +819,11 @@ def _get_woa13_land_sea_mask(save_dir="."):
     return mask
 
 
-def download(url, dest_path='.', progressbar=True):
+def download(url, dest_path='.', fname=None, progressbar=True):
     from pooch import retrieve
     
-    fname = url.split('/')[-1].split('?')[0]
+    if fname is None:
+        fname = url.split('/')[-1].split('?')[0]
     dest = retrieve(url, None, fname, dest_path, progressbar=progressbar)
 
     return dest
