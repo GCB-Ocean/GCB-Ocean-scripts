@@ -391,6 +391,15 @@ def rmse_annual(y, yhat):
         rmse: time averaged rmse (but annual average taken first)
         bias: yhat - y (same as rmse but only the mean)
     """
+    # bug fix: mask SOCAT and estimates
+    # need to mask the data before we do the averaging spatially, 
+    # otherwise, there might be some regions in the SOCAT data that 
+    # are not covered by the model and this will skew the results
+    # get the mask of nans for both the model and the data
+    nanmask = y.notnull() & yhat.notnull()
+    # apply the mask to both the model and the data
+    yhat_subs = yhat.where(nanmask)
+    y = y.where(nanmask)
 
     y_avg = y.mean(["lat", "lon"])
     yhat_subs = yhat.where(y.notnull())
@@ -454,6 +463,9 @@ def rmse_monthly(y, yhat):
         bias: average of bias_an
 
     """
+    # masking isn't required for rmse_monthly since a point-wise comparison is done
+    # meaning that missing points are ignored 
+
     # doing the maths
     diff = yhat - y
     count = diff.count(["lat", "lon"])
